@@ -15,13 +15,13 @@ import db
 logger = logging.getLogger(__name__)
 
 # Minimum confidence from classifier to count as aircraft signal
-CONFIDENCE_THRESHOLD = 0.50
+CONFIDENCE_THRESHOLD = 0.40
 # Minimum consecutive seconds above threshold to open an event
-MIN_OPEN_SEC = 4.0
+MIN_OPEN_SEC = 3.0
 # Seconds of silence (below threshold) before closing an event
 CLOSE_GAP_SEC = 8.0
 # Minimum total event duration to save (ignore short bursts)
-MIN_EVENT_SEC = 10.0
+MIN_EVENT_SEC = 6.0
 
 
 @dataclass

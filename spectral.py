@@ -106,13 +106,11 @@ class AircraftScorer:
         cur_lf = cur.get("lf_ratio", 0.0)
         cur_ct = cur.get("spectral_centroid", 9999.0)
 
-        # ── Hard gate: current frame must look like aircraft ──────────────────
-        # Rule: if very little LF energy → not aircraft
-        #       if centroid very high AND LF low → not aircraft
-        #       Exception: high LF (>0.4) overrides centroid check (military jets)
-        gate_fail = (cur_lf < 0.10) or (cur_ct > 1600 and cur_lf < 0.40)
+        # ── Gate: reject obvious non-aircraft ────────────────────────────────
+        # Soft gate: only hard-reject if BOTH centroid is very high AND LF is tiny
+        # Distant aircraft mixed with noise may have moderate lf and mid centroid
+        gate_fail = (cur_lf < 0.05) or (cur_ct > 2500 and cur_lf < 0.25)
         if gate_fail:
-            # Also clear history so past aircraft don't bleed into future background
             self._lf_history.clear()
             self._centroid_history.clear()
             self._db_history.clear()
@@ -122,6 +120,11 @@ class AircraftScorer:
                            "centroid": 0.0, "envelope": 0.0,
                            "duration": 0.0, "continuity": 0.0, "yamnet": 0.0}
             }
+
+        # ── Sticky bonus: recent aircraft frames boost current score ──────────
+        recent_aircraft = sum(1 for lf in list(self._lf_history)[-4:]
+                              if lf > 0.20) / max(1, min(4, len(self._lf_history)))
+        sticky_bonus = recent_aircraft * 0.15
 
         db_list  = list(self._db_history)
         lf_list  = list(self._lf_history)
@@ -196,8 +199,10 @@ class AircraftScorer:
                 W_continuity * continuity_score
             ) / total_w
 
+        confidence = min(1.0, confidence + sticky_bonus)
+
         return {
-            "confidence": round(min(1.0, confidence), 3),
+            "confidence": round(confidence, 3),
             "scores": {
                 "yamnet":      round(yamnet_score, 3),
                 "lf_ratio":    round(lf_score, 3),
