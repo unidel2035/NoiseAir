@@ -97,7 +97,8 @@ async def create_app() -> web.Application:
 
     # To switch to real mic: replace run_simulator with run_detector from detector.py
     async def _run_source(app):
-        task = asyncio.create_task(run_simulator(on_frame))
+        audio_out = os.environ.get("NOISEAIR_AUDIO", "0") == "1"
+        task = asyncio.create_task(run_simulator(on_frame, audio=audio_out))
         yield
         task.cancel()
         tracker.flush()
