@@ -7,7 +7,6 @@ Uses spectral analysis (not just dB) to compute confidence.
 import asyncio
 import logging
 import os
-import struct
 import wave
 from datetime import datetime, timezone
 
@@ -38,35 +37,60 @@ FRAME_SEC = 2.0
 
 
 def _read_wav_chunks(path: str, duration_sec: float, volume: float = 1.0):
-    """Read WAV and return list of (mono_samples, framerate)."""
+    """
+    Read WAV file (any bit depth) and return list of (mono int16 list, framerate).
+    Handles 8, 16, 24, 32-bit PCM.
+    """
     chunks = []
     with wave.open(path, 'rb') as w:
         n_ch      = w.getnchannels()
         framerate = w.getframerate()
         sampwidth = w.getsampwidth()
         chunk_n   = int(framerate * duration_sec)
+        total_frames = w.getnframes()
 
-        while True:
+        while w.tell() + chunk_n <= total_frames:
             raw = w.readframes(chunk_n)
-            if len(raw) < chunk_n * n_ch * sampwidth:
+            arr = _raw_to_int16(raw, sampwidth, n_ch)
+            if arr is None:
                 break
-            n_samples = len(raw) // sampwidth
-            fmt = f"<{n_samples}h"
-            samples = list(struct.unpack(fmt, raw))
 
-            # Mix stereo → mono
-            if n_ch == 2:
-                mono = [(samples[i] + samples[i+1]) // 2
-                        for i in range(0, len(samples), 2)]
-            else:
-                mono = samples
-
-            # Apply volume scale (clip to int16)
+            # Apply volume
             if volume != 1.0:
-                mono = [max(-32768, min(32767, int(s * volume))) for s in mono]
+                arr = np.clip(arr * volume, -32768, 32767).astype(np.int16)
 
-            chunks.append((mono, framerate))
+            # Mix to mono
+            if n_ch == 2:
+                mono = ((arr[0::2].astype(np.int32) + arr[1::2].astype(np.int32)) // 2).astype(np.int16)
+            else:
+                mono = arr
+
+            chunks.append((mono.tolist(), framerate))
     return chunks
+
+
+def _raw_to_int16(raw: bytes, sampwidth: int, n_ch: int) -> np.ndarray:
+    """Convert raw PCM bytes to int16 numpy array (all channels interleaved)."""
+    if sampwidth == 1:
+        arr = np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128
+        return (arr * 256).astype(np.int16)
+    elif sampwidth == 2:
+        return np.frombuffer(raw, dtype=np.int16).copy()
+    elif sampwidth == 3:
+        # 24-bit: 3 bytes per sample, convert to int32 then scale to int16
+        n = len(raw) // 3
+        arr32 = np.zeros(n, dtype=np.int32)
+        raw_np = np.frombuffer(raw, dtype=np.uint8)
+        arr32 = (raw_np[0::3].astype(np.int32) |
+                 (raw_np[1::3].astype(np.int32) << 8) |
+                 (raw_np[2::3].astype(np.int32) << 16))
+        # Sign extend from 24 to 32 bits
+        arr32 = np.where(arr32 >= 0x800000, arr32 - 0x1000000, arr32)
+        return (arr32 >> 8).astype(np.int16)
+    elif sampwidth == 4:
+        arr = np.frombuffer(raw, dtype=np.int32).copy()
+        return (arr >> 16).astype(np.int16)
+    return None
 
 
 async def run_file_player(frame_callback, broadcast_audio_state=None):

@@ -60,7 +60,7 @@
   }
   @keyframes pulse { from{opacity:1} to{opacity:0.6} }
 
-  canvas { width: 100% !important; display: block; }
+  canvas { width: 100% !important; height: 90px; display: block; }
 
   /* Stats row */
   .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -201,7 +201,8 @@ const canvas = document.getElementById('chart');
 const ctx = canvas.getContext('2d');
 
 function drawChart() {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
+  const W = canvas.offsetWidth || 400;
+  const H = 90;
   canvas.width = W; canvas.height = H;
   ctx.clearRect(0, 0, W, H);
 
