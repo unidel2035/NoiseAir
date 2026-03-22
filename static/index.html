@@ -154,6 +154,11 @@
   <div class="dot" id="connDot"></div>
   <h1>✈ NoiseAir — Aircraft Noise Monitor</h1>
   <span id="connStatus" style="font-size:0.8rem;color:#888;margin-left:auto">connecting...</span>
+  <button id="audioBtn" onclick="toggleAudio()"
+    style="margin-left:16px;background:#2a2d3e;color:#ccc;border:1px solid #3a3d4e;
+           padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.8rem">
+    🔇 Звук выкл
+  </button>
 </header>
 
 <div class="grid">
@@ -332,6 +337,9 @@ function connectSSE() {
       banner.style.display = 'none';
     }
 
+    // Audio
+    updateAudio(db, conf);
+
     // Chart
     dbHistory.shift();
     dbHistory.push(db);
@@ -387,6 +395,91 @@ loadEvents();
 loadStats();
 setInterval(loadEvents, 30000);
 setInterval(loadStats, 30000);
+
+// ── Web Audio synthesis ───────────────────────────────────────────────────────
+let audioCtx = null;
+let audioEnabled = false;
+
+// Active nodes
+let engineOsc1, engineOsc2, engineOsc3, turbineOsc, noiseSource;
+let engineGain, turbineGain, masterGain;
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0;
+  masterGain.connect(audioCtx.destination);
+
+  // Jet engine: 3 low harmonics
+  engineGain = audioCtx.createGain();
+  engineGain.gain.value = 0.5;
+  engineGain.connect(masterGain);
+
+  engineOsc1 = audioCtx.createOscillator(); engineOsc1.type = 'sawtooth';
+  engineOsc1.frequency.value = 130;
+  engineOsc1.connect(engineGain); engineOsc1.start();
+
+  engineOsc2 = audioCtx.createOscillator(); engineOsc2.type = 'sawtooth';
+  engineOsc2.frequency.value = 260;
+  engineOsc2.connect(engineGain); engineOsc2.start();
+
+  engineOsc3 = audioCtx.createOscillator(); engineOsc3.type = 'sine';
+  engineOsc3.frequency.value = 390;
+  engineOsc3.connect(engineGain); engineOsc3.start();
+
+  // Turbine whine ~2200 Hz
+  turbineGain = audioCtx.createGain();
+  turbineGain.gain.value = 0.15;
+  turbineGain.connect(masterGain);
+
+  turbineOsc = audioCtx.createOscillator(); turbineOsc.type = 'sine';
+  turbineOsc.frequency.value = 2200;
+  turbineOsc.connect(turbineGain); turbineOsc.start();
+
+  // Background noise (white noise via ScriptProcessor)
+  const bufferSize = 4096;
+  noiseSource = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+  noiseSource.onaudioprocess = e => {
+    const out = e.outputBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) out[i] = (Math.random() * 2 - 1) * 0.03;
+  };
+  noiseSource.connect(masterGain);
+}
+
+function updateAudio(db, confidence) {
+  if (!audioCtx || !audioEnabled) return;
+
+  const NOISE_FLOOR = 42;
+  const delta = Math.max(0, db - NOISE_FLOOR);
+
+  // Master volume: maps dB to 0..0.8
+  const vol = Math.min(0.8, delta / 50);
+  masterGain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.5);
+
+  // Doppler: pitch shifts slightly with confidence
+  const pitchMod = 1 + (confidence - 0.5) * 0.04;
+  engineOsc1.frequency.setTargetAtTime(130 * pitchMod, audioCtx.currentTime, 0.3);
+  engineOsc2.frequency.setTargetAtTime(260 * pitchMod, audioCtx.currentTime, 0.3);
+  turbineOsc.frequency.setTargetAtTime(2200 * pitchMod, audioCtx.currentTime, 0.3);
+}
+
+function toggleAudio() {
+  if (!audioCtx) initAudio();
+  audioEnabled = !audioEnabled;
+  const btn = document.getElementById('audioBtn');
+  if (audioEnabled) {
+    audioCtx.resume();
+    btn.textContent = '🔊 Звук вкл';
+    btn.style.color = '#a5d6a7';
+    btn.style.borderColor = '#4caf50';
+  } else {
+    masterGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.2);
+    btn.textContent = '🔇 Звук выкл';
+    btn.style.color = '#ccc';
+    btn.style.borderColor = '#3a3d4e';
+  }
+}
 </script>
 </body>
 </html>
