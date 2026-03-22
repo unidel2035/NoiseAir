@@ -24,18 +24,27 @@ _sse_clients: list[web.StreamResponse] = []
 _last_frame: dict = {}
 
 
-async def _broadcast_frame(frame: dict):
-    global _last_frame
-    _last_frame = frame
+async def _broadcast(event_type: str, payload: dict):
     dead = []
     for resp in _sse_clients:
         try:
-            data = json.dumps(frame)
-            await resp.write(f"data: {data}\n\n".encode())
+            await resp.write(
+                f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+            )
         except Exception:
             dead.append(resp)
     for d in dead:
         _sse_clients.remove(d)
+
+
+async def _broadcast_frame(frame: dict):
+    global _last_frame
+    _last_frame = frame
+    await _broadcast("frame", frame)
+
+
+async def broadcast_new_event(event: dict):
+    await _broadcast("new_event", event)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -51,7 +60,9 @@ async def handle_live(request: web.Request) -> web.StreamResponse:
     _sse_clients.append(resp)
     # Send last known frame immediately
     if _last_frame:
-        await resp.write(f"data: {json.dumps(_last_frame)}\n\n".encode())
+        await resp.write(
+            f"event: frame\ndata: {json.dumps(_last_frame)}\n\n".encode()
+        )
     try:
         while True:
             await asyncio.sleep(30)
@@ -89,7 +100,7 @@ async def handle_index(request: web.Request) -> web.FileResponse:
 async def create_app() -> web.Application:
     db.init_db()
 
-    tracker = EventTracker()
+    tracker = EventTracker(on_event=broadcast_new_event)
 
     async def on_frame(frame: dict):
         tracker.push_frame(frame)

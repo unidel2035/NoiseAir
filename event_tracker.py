@@ -3,10 +3,11 @@ Event tracker: accumulates audio frames with aircraft classification,
 detects start/end of flyover events, saves to DB.
 """
 
+import asyncio
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Callable
 from datetime import datetime, timezone
 
 import db
@@ -29,47 +30,36 @@ class _ActiveEvent:
     db_samples: list = field(default_factory=list)
     confidence_samples: list = field(default_factory=list)
     last_active: float = field(default_factory=time.monotonic)
-    adsb: Optional[dict] = None  # nearest ADS-B aircraft at event start
 
 
 class EventTracker:
     """
     Feed frames into push_frame().
-    Each frame is a dict:
-        {
-          "ts":         ISO timestamp string,
-          "db_level":   float (dB SPL),
-          "confidence": float 0..1  (aircraft class probability),
-          "adsb":       dict or None  (nearest aircraft from ADS-B)
-        }
+    Each frame: { "ts": str, "db_level": float, "confidence": float }
+    on_event(record): async callback called when an event is saved.
     """
 
-    def __init__(self):
+    def __init__(self, on_event: Optional[Callable] = None):
         self._event: Optional[_ActiveEvent] = None
-        self._pending_frames: list = []   # frames above threshold before event opens
+        self._pending_frames: list = []
         self._pending_start: float = 0.0
+        self._on_event = on_event
 
     def push_frame(self, frame: dict):
         confidence = frame["confidence"]
         ts = frame["ts"]
         db_level = frame["db_level"]
-        adsb = frame.get("adsb")
         now = time.monotonic()
 
         if confidence >= CONFIDENCE_THRESHOLD:
             if self._event is None:
-                # Accumulate pending frames to decide when to open
                 if not self._pending_frames:
                     self._pending_start = now
                 self._pending_frames.append(frame)
 
                 if (now - self._pending_start) >= MIN_OPEN_SEC:
-                    # Open event
                     first = self._pending_frames[0]
-                    self._event = _ActiveEvent(
-                        ts_start=first["ts"],
-                        adsb=adsb or first.get("adsb"),
-                    )
+                    self._event = _ActiveEvent(ts_start=first["ts"])
                     for pf in self._pending_frames:
                         self._event.db_samples.append(pf["db_level"])
                         self._event.confidence_samples.append(pf["confidence"])
@@ -79,10 +69,7 @@ class EventTracker:
                 self._event.db_samples.append(db_level)
                 self._event.confidence_samples.append(confidence)
                 self._event.last_active = now
-                if adsb and not self._event.adsb:
-                    self._event.adsb = adsb
         else:
-            # Below threshold
             self._pending_frames = []
             if self._event is not None:
                 if (now - self._event.last_active) >= CLOSE_GAP_SEC:
@@ -108,18 +95,24 @@ class EventTracker:
             "peak_db":        round(peak_db, 1),
             "avg_db":         round(avg_db, 1),
             "avg_confidence": round(avg_conf, 3),
-            "icao":           ev.adsb.get("icao") if ev.adsb else None,
-            "callsign":       ev.adsb.get("callsign") if ev.adsb else None,
-            "altitude_ft":    ev.adsb.get("altitude_ft") if ev.adsb else None,
-            "distance_km":    ev.adsb.get("distance_km") if ev.adsb else None,
+            "icao":           None,
+            "callsign":       None,
+            "altitude_ft":    None,
+            "distance_km":    None,
         }
 
         event_id = db.insert_event(record)
-        logger.info(
-            "Event saved id=%d  %s → %s  %.1fs  %.1fdB  icao=%s",
-            event_id, record["ts_start"], record["ts_end"],
-            duration, peak_db, record["icao"]
-        )
+        record["id"] = event_id
+        logger.info("Event saved id=%d  %s → %s  %.1fs  %.1fdB",
+                    event_id, record["ts_start"], record["ts_end"],
+                    duration, peak_db)
+
+        if self._on_event:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self._on_event(record))
+            except RuntimeError:
+                pass
 
     def flush(self, ts_end: str = None):
         """Force-close any open event (call on shutdown)."""

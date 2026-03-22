@@ -313,7 +313,13 @@ function connectSSE() {
     es.close();
   };
 
-  es.onmessage = e => {
+  es.addEventListener('new_event', e => {
+    const ev = JSON.parse(e.data);
+    prependEvent(ev);
+    loadStats();
+  });
+
+  es.addEventListener('frame', e => {
     const f = JSON.parse(e.data);
 
     // dB gauge
@@ -343,7 +349,7 @@ function connectSSE() {
     // Chart
     dbHistory.shift();
     dbHistory.push(db);
-  };
+  });  // end frame listener
 }
 connectSSE();
 
@@ -366,21 +372,29 @@ function resetFilters() {
   loadEvents();
 }
 
+function _eventRow(ev) {
+  const dt = new Date(ev.ts_start).toLocaleString('ru-RU');
+  return `<tr>
+    <td>${dt}</td>
+    <td>${ev.duration_sec}s</td>
+    <td>${ev.peak_db}</td>
+    <td>${ev.avg_db}</td>
+    <td>${Math.round(ev.avg_confidence * 100)}%</td>
+  </tr>`;
+}
+
 function renderEvents(events) {
   const tbody = document.getElementById('evtBody');
-  tbody.innerHTML = '';
-  events.forEach(ev => {
-    const dt = new Date(ev.ts_start).toLocaleString('ru-RU');
-    tbody.insertAdjacentHTML('beforeend', `
-      <tr>
-        <td>${dt}</td>
-        <td>${ev.duration_sec}s</td>
-        <td>${ev.peak_db}</td>
-        <td>${ev.avg_db}</td>
-        <td>${Math.round(ev.avg_confidence * 100)}%</td>
-      </tr>
-    `);
-  });
+  tbody.innerHTML = events.map(_eventRow).join('');
+}
+
+function prependEvent(ev) {
+  const tbody = document.getElementById('evtBody');
+  tbody.insertAdjacentHTML('afterbegin', _eventRow(ev));
+  // Flash новой строки
+  const row = tbody.firstElementChild;
+  row.style.background = '#1b3a2a';
+  setTimeout(() => row.style.background = '', 2000);
 }
 
 async function loadStats() {
