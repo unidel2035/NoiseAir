@@ -2,7 +2,7 @@ import sqlite3
 import os
 from datetime import datetime
 
-DB_PATH = os.environ.get("NOISEAIR_DB", "/home/pi/noiseair/noiseair.db")
+DB_PATH = os.environ.get("NOISEAIR_DB", os.path.join(os.path.dirname(__file__), "noiseair.db"))
 
 
 def get_conn():
