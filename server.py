@@ -13,6 +13,7 @@ from aiohttp import web
 import db
 from event_tracker import EventTracker
 from simulator import run_simulator
+from file_player import run_file_player
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +107,18 @@ async def create_app() -> web.Application:
         tracker.push_frame(frame)
         await _broadcast_frame(frame)
 
-    # To switch to real mic: replace run_simulator with run_detector from detector.py
+    async def _audio_state(label: str):
+        await _broadcast("audio_state", {"label": label})
+
+    # Source: "files" = real WAV files, "sim" = synthetic, "mic" = detector.py
+    source = os.environ.get("NOISEAIR_SOURCE", "files")
+
     async def _run_source(app):
-        audio_out = os.environ.get("NOISEAIR_AUDIO", "0") == "1"
-        task = asyncio.create_task(run_simulator(on_frame, audio=audio_out))
+        if source == "files":
+            task = asyncio.create_task(run_file_player(on_frame, _audio_state))
+        else:
+            audio_out = os.environ.get("NOISEAIR_AUDIO", "0") == "1"
+            task = asyncio.create_task(run_simulator(on_frame, audio=audio_out))
         yield
         task.cancel()
         tracker.flush()
@@ -122,6 +131,7 @@ async def create_app() -> web.Application:
     app.router.add_get("/api/events",  handle_events)
     app.router.add_get("/api/stats",   handle_stats)
     app.router.add_static("/static",   STATIC_DIR)
+    app.router.add_static("/audio",    os.path.join(os.path.dirname(__file__), "audio"))
 
     return app
 
