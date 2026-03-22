@@ -326,7 +326,7 @@ setInterval(loadStats,  30000);
 // ── Audio playback (real WAV files) ──────────────────────────────────────────
 let audioEnabled = false;
 let currentAudio = null;
-let pendingLabel = null;
+let currentLabel = 'background';
 
 const AUDIO_FILES = {
   aircraft:   '/audio/aircraft.wav',
@@ -338,21 +338,23 @@ const LABEL_NAMES = {
 };
 
 function handleAudioState(label) {
-  pendingLabel = label;
+  currentLabel = label;
   document.getElementById('audioLabel').textContent = LABEL_NAMES[label] || label;
-  if (audioEnabled) playLabel(label);
+  // Переключаем только если аудио уже разблокировано кнопкой
+  if (audioEnabled) _switchTo(label);
 }
 
-function playLabel(label) {
+function _switchTo(label) {
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-  if (!audioEnabled || !AUDIO_FILES[label]) return;
+  if (!AUDIO_FILES[label]) return;
   const a = new Audio(AUDIO_FILES[label]);
-  a.volume = 0.8;
-  a.play().catch(() => {});
-  currentAudio = a;
+  a.volume = 0.85;
+  a.play().then(() => {
+    currentAudio = a;
+  }).catch(err => console.warn('audio play failed:', err));
 }
 
-function updateAudio(db, confidence) { /* dB визуализация — звук управляется handleAudioState */ }
+function updateAudio() { /* звук управляется handleAudioState */ }
 
 function toggleAudio() {
   audioEnabled = !audioEnabled;
@@ -361,7 +363,8 @@ function toggleAudio() {
     btn.textContent = '🔊 Звук вкл';
     btn.style.color = '#a5d6a7';
     btn.style.borderColor = '#4caf50';
-    if (pendingLabel) playLabel(pendingLabel);
+    // Первый запуск — из клика (user gesture), браузер разрешит
+    _switchTo(currentLabel || 'background');
   } else {
     btn.textContent = '🔇 Звук выкл';
     btn.style.color = '#ccc';
