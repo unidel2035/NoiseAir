@@ -248,9 +248,14 @@ function connectSSE() {
   es.addEventListener('new_event',    e => { prependEvent(JSON.parse(e.data)); loadStats(); });
   es.addEventListener('audio_state',  e => { handleAudioState(JSON.parse(e.data).label); });
 
+  let sDb = null, sConf = null;
+  const A = 0.3; // EMA alpha for meter
+
   es.addEventListener('frame', e => {
     const f = JSON.parse(e.data);
-    const db = f.db_level, conf = f.confidence;
+    sDb   = sDb   === null ? f.db_level   : sDb   * (1-A) + f.db_level   * A;
+    sConf = sConf === null ? f.confidence : sConf * (1-A) + f.confidence * A;
+    const db = sDb, conf = sConf;
 
     document.getElementById('dbVal').textContent = db.toFixed(1);
     const pct = Math.max(0, Math.min(100, ((db - 30) / 70) * 100));
@@ -263,23 +268,10 @@ function connectSSE() {
 
     document.getElementById('alertBanner').style.display = (conf >= 0.5) ? 'block' : 'none';
 
-    // Scores breakdown
+    // Scores breakdown — smoothed with EMA
     if (f.scores && Object.keys(f.scores).length) {
       document.getElementById('scoresBox').style.display = 'block';
-      const NAMES = {lf_ratio:'НЧ спектр',centroid:'Центроид',envelope:'Огибающая',duration:'Длительность',continuity:'Непрерывность',yamnet:'YAMNet'};
-      document.getElementById('scoresList').innerHTML = Object.entries(f.scores)
-        .filter(([k,v]) => v > 0)
-        .map(([k,v]) => {
-          const pct = Math.round(v*100);
-          const col = pct > 60 ? '#4caf50' : pct > 30 ? '#ff9800' : '#666';
-          return `<div style="display:flex;align-items:center;gap:6px">
-            <span style="color:#888;width:90px;flex-shrink:0">${NAMES[k]||k}</span>
-            <div style="flex:1;background:#0f1117;border-radius:3px;height:5px;overflow:hidden">
-              <div style="width:${pct}%;height:100%;background:${col};transition:width 0.4s"></div>
-            </div>
-            <span style="color:#ccc;width:28px;text-align:right">${pct}%</span>
-          </div>`;
-        }).join('');
+      updateScores(f.scores);
     }
 
     updateAudio(db, conf);
@@ -340,6 +332,55 @@ async function loadStats() {
   document.getElementById('stAvgDur').textContent = s.avg_duration   ? s.avg_duration + ' с' : '—';
   document.getElementById('stMaxDb').textContent  = s.max_peak_db   ?? '—';
   document.getElementById('stAvgDb').textContent  = s.avg_peak_db   ?? '—';
+}
+
+// ── Scores smoothing ──────────────────────────────────────────────────────────
+const SCORE_NAMES = {
+  lf_ratio:    'НЧ спектр',
+  centroid:    'Центроид',
+  envelope:    'Огибающая',
+  duration:    'Длительность',
+  continuity:  'Непрерывность',
+  yamnet:      'YAMNet',
+};
+const EMA_ALPHA  = 0.25;  // smoothing factor: lower = smoother
+const smoothed   = {};    // current smoothed values
+let   scoresInit = false;
+
+function updateScores(scores) {
+  // First time — build DOM
+  if (!scoresInit) {
+    const list = document.getElementById('scoresList');
+    list.innerHTML = Object.keys(SCORE_NAMES).map(k =>
+      `<div style="display:flex;align-items:center;gap:6px" id="sr_${k}">
+        <span style="color:#888;width:90px;flex-shrink:0">${SCORE_NAMES[k]}</span>
+        <div style="flex:1;background:#0f1117;border-radius:3px;height:5px;overflow:hidden">
+          <div id="sb_${k}" style="width:0%;height:100%;background:#666;transition:width 0.8s,background 0.8s"></div>
+        </div>
+        <span id="sv_${k}" style="color:#ccc;width:28px;text-align:right;font-size:0.72rem">0%</span>
+      </div>`
+    ).join('');
+    scoresInit = true;
+  }
+
+  // EMA smooth each value
+  Object.entries(scores).forEach(([k, v]) => {
+    smoothed[k] = smoothed[k] === undefined
+      ? v
+      : smoothed[k] * (1 - EMA_ALPHA) + v * EMA_ALPHA;
+  });
+
+  // Update bars
+  Object.entries(smoothed).forEach(([k, v]) => {
+    const bar = document.getElementById('sb_' + k);
+    const val = document.getElementById('sv_' + k);
+    if (!bar) return;
+    const pct = Math.round(v * 100);
+    const col = pct > 60 ? '#4caf50' : pct > 30 ? '#ff9800' : '#555';
+    bar.style.width      = pct + '%';
+    bar.style.background = col;
+    val.textContent      = pct + '%';
+  });
 }
 
 loadEvents();
