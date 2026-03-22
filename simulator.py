@@ -54,12 +54,40 @@ def _db_to_confidence(db: float) -> float:
     return round(max(0.0, min(1.0, conf)), 3)
 
 
-async def run_simulator(frame_callback, adsb_client=None):
+def _make_demo_flyover(t: float) -> dict:
+    """
+    Synthetic flyover: aircraft passes overhead every ~90 seconds.
+    Returns fake adsb dict with distance that follows a bell curve.
+    """
+    period = 90.0           # seconds between flyovers
+    flyover_dur = 30.0      # seconds the aircraft is close
+    phase = (t % period) / period
+
+    if phase < (flyover_dur / period):
+        # Bell curve: 0 → closest at midpoint → 0
+        x = phase / (flyover_dur / period)  # 0..1
+        envelope = math.sin(x * math.pi)   # 0→1→0
+        dist_km = 0.2 + (1 - envelope) * 3.0   # 0.2..3.2 km
+        alt_ft  = int(500 + (1 - envelope) * 2000)
+        return {
+            "icao":        "TEST01",
+            "callsign":    "DEMO01",
+            "altitude_ft": alt_ft,
+            "distance_km": round(dist_km, 2),
+            "lat": 56.84,
+            "lon": 53.25,
+        }
+    return None
+
+
+async def run_simulator(frame_callback, adsb_client=None, demo: bool = False):
     """
     Continuously produces frames and calls frame_callback(frame).
     If adsb_client is provided, uses real ADS-B data.
+    If demo=True (or ADS-B unavailable), generates synthetic flyovers for testing.
     """
-    logger.info("Simulator started (frame interval=%.1fs)", FRAME_SEC)
+    logger.info("Simulator started (frame interval=%.1fs, demo=%s)", FRAME_SEC, demo)
+    t0 = asyncio.get_event_loop().time()
 
     while True:
         ts = datetime.now(timezone.utc).isoformat()
@@ -68,10 +96,14 @@ async def run_simulator(frame_callback, adsb_client=None):
         if adsb_client:
             adsb = await adsb_client.get_nearest()
 
+        # If no real ADS-B, fall back to demo flyovers
+        if adsb is None:
+            elapsed = asyncio.get_event_loop().time() - t0
+            adsb = _make_demo_flyover(elapsed)
+
         if adsb and adsb.get("distance_km", 999) <= 15.0:
             db_level = _distance_to_db(adsb["distance_km"], adsb.get("altitude_ft", 1000))
         else:
-            # Background noise only
             db_level = NOISE_FLOOR_DB + random.gauss(0, NOISE_FLOOR_JITTER)
             db_level = round(db_level, 1)
 
