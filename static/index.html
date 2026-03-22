@@ -134,6 +134,10 @@
         <div class="conf-bar"><div class="conf-fill" id="confFill" style="width:0%"></div></div>
         <div class="conf-val" id="confVal">0%</div>
       </div>
+      <div id="scoresBox" style="margin-top:10px;display:none">
+        <div style="font-size:0.7rem;color:#888;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Критерии</div>
+        <div id="scoresList" style="font-size:0.75rem;display:flex;flex-direction:column;gap:3px"></div>
+      </div>
       <div class="thresh-row">
         <span style="font-size:0.75rem;color:#888;width:90px;flex-shrink:0">Порог алерта</span>
         <input type="range" id="threshSlider" min="50" max="90" value="70" style="flex:1;accent-color:#7c4dff">
@@ -256,7 +260,26 @@ function connectSSE() {
     document.getElementById('confFill').style.width = (conf * 100) + '%';
     document.getElementById('confVal').textContent = Math.round(conf * 100) + '%';
 
-    document.getElementById('alertBanner').style.display = (db >= threshold && conf >= 0.5) ? 'block' : 'none';
+    document.getElementById('alertBanner').style.display = (conf >= 0.5) ? 'block' : 'none';
+
+    // Scores breakdown
+    if (f.scores && Object.keys(f.scores).length) {
+      document.getElementById('scoresBox').style.display = 'block';
+      const NAMES = {lf_ratio:'НЧ спектр',centroid:'Центроид',envelope:'Огибающая',duration:'Длительность',continuity:'Непрерывность',yamnet:'YAMNet'};
+      document.getElementById('scoresList').innerHTML = Object.entries(f.scores)
+        .filter(([k,v]) => v > 0)
+        .map(([k,v]) => {
+          const pct = Math.round(v*100);
+          const col = pct > 60 ? '#4caf50' : pct > 30 ? '#ff9800' : '#666';
+          return `<div style="display:flex;align-items:center;gap:6px">
+            <span style="color:#888;width:90px;flex-shrink:0">${NAMES[k]||k}</span>
+            <div style="flex:1;background:#0f1117;border-radius:3px;height:5px;overflow:hidden">
+              <div style="width:${pct}%;height:100%;background:${col};transition:width 0.4s"></div>
+            </div>
+            <span style="color:#ccc;width:28px;text-align:right">${pct}%</span>
+          </div>`;
+        }).join('');
+    }
 
     updateAudio(db, conf);
     dbHistory.shift(); dbHistory.push(db);
@@ -329,26 +352,36 @@ let currentAudio = null;
 let currentLabel = 'background';
 
 const AUDIO_FILES = {
-  aircraft:   '/audio/aircraft.wav',
-  background: '/audio/background.wav',
+  background:     '/audio/background.wav',
+  propeller:      '/audio/aircraft.wav',
+  jet_civil:      '/audio/jet_civil.wav',
+  jet_civil_far:  '/audio/jet_civil.wav',
+  jet_military:   '/audio/jet_military.wav',
+  sonic_boom:     '/audio/jet_sonicboom.wav',
 };
 const LABEL_NAMES = {
-  aircraft:   '✈ Самолёт',
-  background: '🌿 Фон',
+  background:    '🌿 Фон',
+  propeller:     '✈ Винтовой',
+  jet_civil:     '✈ Реактивный',
+  jet_civil_far: '✈ Реактивный (далеко)',
+  jet_military:  '🛩 Военный',
+  sonic_boom:    '💥 Сверхзвуковой',
 };
 
-function handleAudioState(label) {
+function handleAudioState(label, volume) {
   currentLabel = label;
+  currentVolume = volume || 1.0;
   document.getElementById('audioLabel').textContent = LABEL_NAMES[label] || label;
-  // Переключаем только если аудио уже разблокировано кнопкой
-  if (audioEnabled) _switchTo(label);
+  if (audioEnabled) _switchTo(label, currentVolume);
 }
 
-function _switchTo(label) {
+let currentVolume = 1.0;
+
+function _switchTo(label, volume) {
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   if (!AUDIO_FILES[label]) return;
   const a = new Audio(AUDIO_FILES[label]);
-  a.volume = 0.85;
+  a.volume = Math.min(1.0, (volume || 1.0) * 0.85);
   a.play().then(() => {
     currentAudio = a;
   }).catch(err => console.warn('audio play failed:', err));
@@ -363,8 +396,7 @@ function toggleAudio() {
     btn.textContent = '🔊 Звук вкл';
     btn.style.color = '#a5d6a7';
     btn.style.borderColor = '#4caf50';
-    // Первый запуск — из клика (user gesture), браузер разрешит
-    _switchTo(currentLabel || 'background');
+    _switchTo(currentLabel || 'background', currentVolume);
   } else {
     btn.textContent = '🔇 Звук выкл';
     btn.style.color = '#ccc';

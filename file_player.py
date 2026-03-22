@@ -1,111 +1,114 @@
 """
 File player: replaces simulator.py for testing with real audio files.
-Loops: background.wav → aircraft.wav → background.wav → ...
-Computes real dB from audio samples, sends frames to event_tracker.
-Browser plays the same files via Web Audio API.
+Playlist of aircraft sounds at different noise levels.
+Uses spectral analysis (not just dB) to compute confidence.
 """
 
 import asyncio
 import logging
-import math
+import os
 import struct
 import wave
-import os
 from datetime import datetime, timezone
+
+import numpy as np
+
+from spectral import compute_spectral_features, AircraftScorer
 
 logger = logging.getLogger(__name__)
 
-AUDIO_DIR   = os.path.join(os.path.dirname(__file__), "audio")
-AIRCRAFT_WAV = os.path.join(AUDIO_DIR, "aircraft.wav")
-BACKGROUND_WAV = os.path.join(AUDIO_DIR, "background.wav")
+AUDIO_DIR = os.path.join(os.path.dirname(__file__), "audio")
 
-FRAME_SEC    = 2.0
-NOISE_FLOOR_DB = 42.0
-
-# Playlist: (file, label, repeat_times)
+# Playlist: (filename, label, volume_scale)
+# volume_scale: 1.0 = original, 0.3 = quiet distant aircraft
 PLAYLIST = [
-    (BACKGROUND_WAV, "background", 1),
-    (AIRCRAFT_WAV,   "aircraft",   1),
-    (BACKGROUND_WAV, "background", 1),
-    (AIRCRAFT_WAV,   "aircraft",   1),
+    ("background.wav",  "background",    1.0),   # фон
+    ("jet_civil.wav",   "jet_civil",     1.0),   # гражданский реактивный
+    ("background.wav",  "background",    1.0),   # фон
+    ("aircraft.wav",    "propeller",     1.0),   # винтовой
+    ("background.wav",  "background",    1.0),   # фон
+    ("jet_military.wav","jet_military",  1.2),   # военный (громче)
+    ("background.wav",  "background",    1.0),   # фон
+    ("jet_sonicboom.wav","sonic_boom",   1.5),   # сверхзвуковой (очень громко)
+    ("background.wav",  "background",    1.0),   # фон
+    ("jet_civil.wav",   "jet_civil_far", 0.25),  # гражданский далеко (тихо)
 ]
 
+FRAME_SEC = 2.0
 
-def _read_wav_frames(path: str, duration_sec: float) -> list:
-    """Read WAV file and return list of (samples_array, n_channels, framerate) per chunk."""
+
+def _read_wav_chunks(path: str, duration_sec: float, volume: float = 1.0):
+    """Read WAV and return list of (mono_samples, framerate)."""
     chunks = []
     with wave.open(path, 'rb') as w:
-        n_channels  = w.getnchannels()
-        framerate   = w.getframerate()
-        sampwidth   = w.getsampwidth()
-        chunk_frames = int(framerate * duration_sec)
+        n_ch      = w.getnchannels()
+        framerate = w.getframerate()
+        sampwidth = w.getsampwidth()
+        chunk_n   = int(framerate * duration_sec)
 
         while True:
-            raw = w.readframes(chunk_frames)
-            if len(raw) < chunk_frames * n_channels * sampwidth // 2:
+            raw = w.readframes(chunk_n)
+            if len(raw) < chunk_n * n_ch * sampwidth:
                 break
-            # Unpack to int16
             n_samples = len(raw) // sampwidth
-            fmt = f"<{n_samples}{'h' if sampwidth == 2 else 'b'}"
+            fmt = f"<{n_samples}h"
             samples = list(struct.unpack(fmt, raw))
-            # Mix to mono
-            if n_channels == 2:
-                mono = [(samples[i] + samples[i+1]) // 2 for i in range(0, len(samples), 2)]
+
+            # Mix stereo → mono
+            if n_ch == 2:
+                mono = [(samples[i] + samples[i+1]) // 2
+                        for i in range(0, len(samples), 2)]
             else:
                 mono = samples
-            chunks.append(mono)
+
+            # Apply volume scale (clip to int16)
+            if volume != 1.0:
+                mono = [max(-32768, min(32767, int(s * volume))) for s in mono]
+
+            chunks.append((mono, framerate))
     return chunks
 
 
-def _rms_db(samples: list) -> float:
-    if not samples:
-        return NOISE_FLOOR_DB
-    mean_sq = sum(s * s for s in samples) / len(samples)
-    rms = math.sqrt(max(mean_sq, 1.0))
-    db = 20 * math.log10(rms / 32768.0) + 94.0
-    return round(db, 1)
-
-
-def _db_to_confidence(db: float) -> float:
-    delta = db - NOISE_FLOOR_DB
-    if delta < 5:
-        return 0.05
-    conf = 1 / (1 + math.exp(-0.3 * (delta - 10)))
-    return round(min(1.0, conf), 3)
-
-
 async def run_file_player(frame_callback, broadcast_audio_state=None):
-    """
-    Loops through PLAYLIST, reads audio in 2-sec chunks,
-    computes real dB, sends frames.
-    broadcast_audio_state(label) notifies browser which file is playing.
-    """
-    logger.info("File player started")
+    logger.info("File player started, %d tracks in playlist", len(PLAYLIST))
+    scorer = AircraftScorer()
 
     while True:
-        for wav_path, label, repeats in PLAYLIST:
-            for _ in range(repeats):
-                logger.info("Playing: %s (%s)", label, os.path.basename(wav_path))
+        for filename, label, volume in PLAYLIST:
+            path = os.path.join(AUDIO_DIR, filename)
+            if not os.path.exists(path):
+                logger.warning("Audio file not found: %s", path)
+                continue
 
-                if broadcast_audio_state:
-                    await broadcast_audio_state(label)
+            logger.info("Playing: %s (label=%s volume=%.2f)", filename, label, volume)
 
-                chunks = await asyncio.get_event_loop().run_in_executor(
-                    None, _read_wav_frames, wav_path, FRAME_SEC
+            if broadcast_audio_state:
+                await broadcast_audio_state(label, volume)
+
+            chunks = await asyncio.get_event_loop().run_in_executor(
+                None, _read_wav_chunks, path, FRAME_SEC, volume
+            )
+
+            for mono, framerate in chunks:
+                ts       = datetime.now(timezone.utc).isoformat()
+                features = compute_spectral_features(mono, framerate)
+                scorer.push(features)
+                result   = scorer.score()
+
+                frame = {
+                    "ts":               ts,
+                    "db_level":         features["db_level"],
+                    "confidence":       result["confidence"],
+                    "label":            label,
+                    "lf_ratio":         features["lf_ratio"],
+                    "spectral_centroid": features["spectral_centroid"],
+                    "scores":           result["scores"],
+                }
+                logger.debug(
+                    "db=%.1f lf=%.2f ct=%.0f conf=%.3f label=%s",
+                    features["db_level"], features["lf_ratio"],
+                    features["spectral_centroid"], result["confidence"], label
                 )
 
-                for chunk in chunks:
-                    ts       = datetime.now(timezone.utc).isoformat()
-                    db_level = _rms_db(chunk)
-                    confidence = _db_to_confidence(db_level)
-
-                    frame = {
-                        "ts":         ts,
-                        "db_level":   db_level,
-                        "confidence": confidence,
-                        "label":      label,
-                    }
-                    logger.debug("Frame: db=%.1f conf=%.3f label=%s", db_level, confidence, label)
-
-                    await frame_callback(frame)
-                    await asyncio.sleep(FRAME_SEC)
+                await frame_callback(frame)
+                await asyncio.sleep(FRAME_SEC)

@@ -107,8 +107,8 @@ async def create_app() -> web.Application:
         tracker.push_frame(frame)
         await _broadcast_frame(frame)
 
-    async def _audio_state(label: str):
-        await _broadcast("audio_state", {"label": label})
+    async def _audio_state(label: str, volume: float = 1.0):
+        await _broadcast("audio_state", {"label": label, "volume": volume})
 
     # Source: "files" = real WAV files, "sim" = synthetic, "mic" = detector.py
     source = os.environ.get("NOISEAIR_SOURCE", "files")
