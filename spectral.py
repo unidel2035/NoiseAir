@@ -114,11 +114,24 @@ class AircraftScorer:
             self._lf_history.clear()
             self._centroid_history.clear()
             self._db_history.clear()
+            # Compute instant scores for display even on gate fail
+            lf_score_i = min(1.0, cur_lf / 0.35)
+            if 150 <= cur_ct <= 900:
+                ct_score_i = 1.0
+            elif cur_ct < 150:
+                ct_score_i = max(0.0, cur_ct / 150)
+            else:
+                ct_score_i = max(0.0, 1.0 - (cur_ct - 900) / 1200)
             return {
                 "confidence": 0.02,
-                "scores": {"gate": 0.0, "lf_ratio": round(cur_lf, 3),
-                           "centroid": 0.0, "envelope": 0.0,
-                           "duration": 0.0, "continuity": 0.0, "yamnet": 0.0}
+                "scores": {
+                    "yamnet":     0.0,
+                    "lf_ratio":   round(lf_score_i, 3),
+                    "centroid":   round(ct_score_i, 3),
+                    "envelope":   0.0,
+                    "duration":   0.0,
+                    "continuity": 0.0,
+                }
             }
 
         # ── Sticky bonus: recent aircraft frames boost current score ──────────
