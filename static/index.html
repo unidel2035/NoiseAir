@@ -183,16 +183,6 @@
     </div>
 
     <div>
-      <div class="meter-label">Nearest Aircraft (ADS-B)</div>
-      <div class="adsb-box" id="adsbBox">
-        <div class="row"><span class="key">ICAO</span><span class="val" id="aIcao">—</span></div>
-        <div class="row"><span class="key">Callsign</span><span class="val" id="aCall">—</span></div>
-        <div class="row"><span class="key">Altitude</span><span class="val" id="aAlt">—</span></div>
-        <div class="row"><span class="key">Distance</span><span class="val" id="aDist">—</span></div>
-      </div>
-    </div>
-
-    <div>
       <div class="meter-label">Alert Threshold</div>
       <div style="display:flex;align-items:center;gap:8px">
         <input type="range" id="threshSlider" min="50" max="90" value="70"
@@ -217,7 +207,7 @@
         <div class="stat-box"><div class="sv" id="stTotal">—</div><div class="sk">Total events</div></div>
         <div class="stat-box"><div class="sv" id="stAvgDur">—</div><div class="sk">Avg duration</div></div>
         <div class="stat-box"><div class="sv" id="stMaxDb">—</div><div class="sk">Max peak dB</div></div>
-        <div class="stat-box"><div class="sv" id="stAircraft">—</div><div class="sk">Unique aircraft</div></div>
+        <div class="stat-box"><div class="sv" id="stAvgDb">—</div><div class="sk">Avg peak dB</div></div>
       </div>
     </div>
 
@@ -226,7 +216,6 @@
       <div class="filters">
         <input type="date" id="fFrom" placeholder="From">
         <input type="date" id="fTo"   placeholder="To">
-        <input type="text" id="fIcao" placeholder="ICAO" style="width:90px">
         <button onclick="loadEvents()">Filter</button>
         <button onclick="resetFilters()">Reset</button>
       </div>
@@ -237,12 +226,8 @@
               <th>Date / Time</th>
               <th>Duration</th>
               <th>Peak dB</th>
+              <th>Avg dB</th>
               <th>Confidence</th>
-              <th>ICAO</th>
-              <th>Callsign</th>
-              <th>Alt ft</th>
-              <th>Dist km</th>
-              <th>Status</th>
             </tr>
           </thead>
           <tbody id="evtBody"></tbody>
@@ -339,13 +324,6 @@ function connectSSE() {
     document.getElementById('confFill').style.width = (conf * 100) + '%';
     document.getElementById('confVal').textContent = Math.round(conf * 100) + '%';
 
-    // ADS-B
-    const a = f.adsb;
-    document.getElementById('aIcao').textContent = a ? a.icao : '—';
-    document.getElementById('aCall').textContent = a ? (a.callsign || '—') : '—';
-    document.getElementById('aAlt').textContent  = a ? (a.altitude_ft ? a.altitude_ft + ' ft' : '—') : '—';
-    document.getElementById('aDist').textContent = a ? a.distance_km + ' km' : '—';
-
     // Alert
     const banner = document.getElementById('alertBanner');
     if (db >= threshold && conf >= 0.5) {
@@ -364,13 +342,11 @@ connectSSE();
 // ── Events table ──────────────────────────────────────────────────────────────
 async function loadEvents() {
   const from  = document.getElementById('fFrom').value;
-  const to    = document.getElementById('fTo').value;
-  const icao  = document.getElementById('fIcao').value.trim();
+  const to = document.getElementById('fTo').value;
 
   let url = '/api/events?limit=200';
-  if (from)  url += '&date_from=' + from + 'T00:00:00';
-  if (to)    url += '&date_to='   + to   + 'T23:59:59';
-  if (icao)  url += '&icao='      + encodeURIComponent(icao.toUpperCase());
+  if (from) url += '&date_from=' + from + 'T00:00:00';
+  if (to)   url += '&date_to='   + to   + 'T23:59:59';
 
   const data = await fetch(url).then(r => r.json());
   renderEvents(data);
@@ -379,7 +355,6 @@ async function loadEvents() {
 function resetFilters() {
   document.getElementById('fFrom').value = '';
   document.getElementById('fTo').value   = '';
-  document.getElementById('fIcao').value = '';
   loadEvents();
 }
 
@@ -387,22 +362,14 @@ function renderEvents(events) {
   const tbody = document.getElementById('evtBody');
   tbody.innerHTML = '';
   events.forEach(ev => {
-    const dt  = new Date(ev.ts_start).toLocaleString('ru-RU');
-    const dur = ev.duration_sec + 's';
-    const badge = ev.icao
-      ? `<span class="badge badge-confirmed">ADS-B confirmed</span>`
-      : `<span class="badge badge-unlinked">unlinked</span>`;
+    const dt = new Date(ev.ts_start).toLocaleString('ru-RU');
     tbody.insertAdjacentHTML('beforeend', `
       <tr>
         <td>${dt}</td>
-        <td>${dur}</td>
+        <td>${ev.duration_sec}s</td>
         <td>${ev.peak_db}</td>
+        <td>${ev.avg_db}</td>
         <td>${Math.round(ev.avg_confidence * 100)}%</td>
-        <td>${ev.icao || '—'}</td>
-        <td>${ev.callsign || '—'}</td>
-        <td>${ev.altitude_ft || '—'}</td>
-        <td>${ev.distance_km || '—'}</td>
-        <td>${badge}</td>
       </tr>
     `);
   });
@@ -410,10 +377,10 @@ function renderEvents(events) {
 
 async function loadStats() {
   const s = await fetch('/api/stats').then(r => r.json());
-  document.getElementById('stTotal').textContent    = s.total_events ?? '0';
-  document.getElementById('stAvgDur').textContent   = s.avg_duration ? s.avg_duration + 's' : '—';
-  document.getElementById('stMaxDb').textContent    = s.max_peak_db ?? '—';
-  document.getElementById('stAircraft').textContent = s.unique_aircraft ?? '0';
+  document.getElementById('stTotal').textContent  = s.total_events ?? '0';
+  document.getElementById('stAvgDur').textContent = s.avg_duration ? s.avg_duration + 's' : '—';
+  document.getElementById('stMaxDb').textContent  = s.max_peak_db ?? '—';
+  document.getElementById('stAvgDb').textContent  = s.avg_peak_db ?? '—';
 }
 
 loadEvents();

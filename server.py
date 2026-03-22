@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 import db
-from adsb_client import AdsbClient
 from event_tracker import EventTracker
 from simulator import run_simulator
 
@@ -90,25 +89,21 @@ async def handle_index(request: web.Request) -> web.FileResponse:
 async def create_app() -> web.Application:
     db.init_db()
 
-    adsb = AdsbClient()
-    await adsb.start()
-
     tracker = EventTracker()
 
     async def on_frame(frame: dict):
         tracker.push_frame(frame)
         await _broadcast_frame(frame)
 
-    # Background task: simulator (swap for detector later)
-    async def _run_sim(app):
-        task = asyncio.create_task(run_simulator(on_frame, adsb_client=adsb))
+    # To switch to real mic: replace run_simulator with run_detector from detector.py
+    async def _run_source(app):
+        task = asyncio.create_task(run_simulator(on_frame))
         yield
         task.cancel()
         tracker.flush()
-        await adsb.stop()
 
     app = web.Application()
-    app.cleanup_ctx.append(_run_sim)
+    app.cleanup_ctx.append(_run_source)
 
     app.router.add_get("/",            handle_index)
     app.router.add_get("/api/live",    handle_live)
