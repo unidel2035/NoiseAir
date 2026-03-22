@@ -81,14 +81,16 @@ class AircraftScorer:
     WINDOW = 15  # number of 2-sec frames to analyse (~30 sec)
 
     def __init__(self):
-        self._db_history:      deque = deque(maxlen=self.WINDOW)
-        self._lf_history:      deque = deque(maxlen=self.WINDOW)
+        self._db_history:       deque = deque(maxlen=self.WINDOW)
+        self._lf_history:       deque = deque(maxlen=self.WINDOW)
         self._centroid_history: deque = deque(maxlen=self.WINDOW)
+        self._current: dict = {"lf_ratio": 0.0, "spectral_centroid": 9999.0}
 
     def push(self, features: dict):
         self._db_history.append(features["db_level"])
         self._lf_history.append(features["lf_ratio"])
         self._centroid_history.append(features["spectral_centroid"])
+        self._current = features  # keep last frame for gate check
 
     def score(self, yamnet_score: float = 0.0) -> dict:
         """
@@ -100,25 +102,46 @@ class AircraftScorer:
         if n < 2:
             return {"confidence": 0.0, "scores": {}}
 
+        cur = getattr(self, '_current', {})
+        cur_lf = cur.get("lf_ratio", 0.0)
+        cur_ct = cur.get("spectral_centroid", 9999.0)
+
+        # ── Hard gate: current frame must look like aircraft ──────────────────
+        # Rule: if very little LF energy → not aircraft
+        #       if centroid very high AND LF low → not aircraft
+        #       Exception: high LF (>0.4) overrides centroid check (military jets)
+        gate_fail = (cur_lf < 0.10) or (cur_ct > 1600 and cur_lf < 0.40)
+        if gate_fail:
+            # Also clear history so past aircraft don't bleed into future background
+            self._lf_history.clear()
+            self._centroid_history.clear()
+            self._db_history.clear()
+            return {
+                "confidence": 0.02,
+                "scores": {"gate": 0.0, "lf_ratio": round(cur_lf, 3),
+                           "centroid": 0.0, "envelope": 0.0,
+                           "duration": 0.0, "continuity": 0.0, "yamnet": 0.0}
+            }
+
         db_list  = list(self._db_history)
         lf_list  = list(self._lf_history)
         ct_list  = list(self._centroid_history)
 
         # ── 1. LF ratio score ─────────────────────────────────────────────────
-        # Aircraft: LF band dominates (ratio > 0.3)
-        avg_lf = sum(lf_list) / len(lf_list)
-        lf_score = min(1.0, avg_lf / 0.4)  # 0.4 LF ratio → full score
+        # Use current frame (80%) + short history (20%) — responsive to now
+        recent_lf = sum(lf_list[-3:]) / len(lf_list[-3:])
+        blended_lf = 0.7 * cur_lf + 0.3 * recent_lf
+        lf_score = min(1.0, blended_lf / 0.35)
 
         # ── 2. Spectral centroid score ────────────────────────────────────────
-        # Aircraft centroid typically 200–800 Hz
-        # Birds/wind: > 2000 Hz, traffic: 100–300 Hz
-        avg_ct = sum(ct_list) / len(ct_list)
-        if 150 <= avg_ct <= 900:
+        # Aircraft centroid: 150–900 Hz
+        # Use current frame — must respond immediately
+        if 150 <= cur_ct <= 900:
             ct_score = 1.0
-        elif avg_ct < 150:
-            ct_score = max(0.0, avg_ct / 150)
+        elif cur_ct < 150:
+            ct_score = max(0.0, cur_ct / 150)
         else:
-            ct_score = max(0.0, 1.0 - (avg_ct - 900) / 2000)
+            ct_score = max(0.0, 1.0 - (cur_ct - 900) / 1200)
 
         # ── 3. Envelope score (bell curve) ────────────────────────────────────
         # Rise then fall pattern: first half avg < second half avg → not a bell
