@@ -107,7 +107,7 @@
   <div class="dot" id="connDot"></div>
   <h1>✈ NoiseAir</h1>
   <span id="connStatus" style="font-size:0.8rem;color:#888">connecting...</span>
-  <span id="audioLabel" style="font-size:0.75rem;color:#555;margin-left:12px"></span>
+  <span id="clockDisplay" style="font-size:0.95rem;color:#ccc;margin-left:20px;font-variant-numeric:tabular-nums;letter-spacing:0.5px"></span>
   <button id="audioBtn" onclick="toggleAudio()"
     style="margin-left:auto;background:#2a2d3e;color:#ccc;border:1px solid #3a3d4e;
            padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.8rem">
@@ -121,6 +121,25 @@
   <div class="top-row">
 
     <div class="panel">
+
+      <!-- Classification badge -->
+      <div id="classBox" style="
+        text-align:center;
+        padding:12px 8px 10px;
+        border-radius:8px;
+        background:#0f1117;
+        margin-bottom:12px;
+        transition:background 0.6s,color 0.6s;
+      ">
+        <div id="classIcon" style="font-size:2rem;line-height:1;transition:opacity 0.4s">—</div>
+        <div id="classLabel" style="
+          font-size:1.15rem;font-weight:700;letter-spacing:1px;
+          margin-top:4px;text-transform:uppercase;
+          color:#888;transition:color 0.6s;
+        ">ожидание...</div>
+        <div id="classConf" style="font-size:0.72rem;color:#555;margin-top:2px"></div>
+      </div>
+
       <div class="meter-label">Уровень шума</div>
       <div class="gauge-wrap">
         <div class="gauge-val" id="dbVal">—</div>
@@ -130,7 +149,7 @@
         <div class="bar-fill" id="dbBar" style="width:0%"></div>
       </div>
       <div class="conf-wrap">
-        <div class="conf-label">Самолёт</div>
+        <div class="conf-label">Уверенность</div>
         <div class="conf-bar"><div class="conf-fill" id="confFill" style="width:0%"></div></div>
         <div class="conf-val" id="confVal">0%</div>
       </div>
@@ -246,7 +265,12 @@ function connectSSE() {
   es.onerror = () => { document.getElementById('connDot').style.background = '#f44336'; document.getElementById('connStatus').textContent = 'переподключение...'; setTimeout(connectSSE, 3000); es.close(); };
 
   es.addEventListener('new_event',    e => { prependEvent(JSON.parse(e.data)); loadStats(); });
-  es.addEventListener('audio_state',  e => { handleAudioState(JSON.parse(e.data).label); });
+  es.addEventListener('audio_state',  e => {
+    const d = JSON.parse(e.data);
+    _lastLabel = d.label;
+    handleAudioState(d.label);
+    updateClass(d.label);
+  });
 
   let sDb = null, sConf = null;
   const A = 0.3; // EMA alpha for meter
@@ -267,6 +291,7 @@ function connectSSE() {
     document.getElementById('confVal').textContent = Math.round(conf * 100) + '%';
 
     document.getElementById('alertBanner').style.display = (conf >= 0.5) ? 'block' : 'none';
+    updateClass(_lastLabel, conf);
 
     // Scores breakdown — smoothed with EMA
     if (f.scores && Object.keys(f.scores).length) {
@@ -387,6 +412,42 @@ loadEvents();
 loadStats();
 setInterval(loadEvents, 60000);
 setInterval(loadStats,  30000);
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const t = now.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  const d = now.toLocaleDateString('ru-RU', {day:'2-digit', month:'2-digit', year:'numeric'});
+  document.getElementById('clockDisplay').textContent = d + '  ' + t;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── Classification badge ───────────────────────────────────────────────────
+const CLASS_MAP = {
+  background:    { icon: '🌿', label: 'Фон',                   color: '#2e7d32', text: '#81c784' },
+  propeller:     { icon: '🛩', label: 'Винтовой самолёт',       color: '#1565c0', text: '#64b5f6' },
+  jet_civil:     { icon: '✈',  label: 'Реактивный самолёт',     color: '#1565c0', text: '#64b5f6' },
+  jet_civil_far: { icon: '✈',  label: 'Самолёт (далеко)',        color: '#0d47a1', text: '#90caf9' },
+  jet_military:  { icon: '🛩', label: 'Военный самолёт',        color: '#4a148c', text: '#ce93d8' },
+  sonic_boom:    { icon: '💥', label: 'Сверхзвуковой',          color: '#b71c1c', text: '#ef9a9a' },
+};
+
+let _lastLabel = 'background';
+
+function updateClass(label, conf) {
+  const c = CLASS_MAP[label] || { icon: '❓', label: label, color: '#333', text: '#aaa' };
+  const box = document.getElementById('classBox');
+  box.style.background = c.color + '33';  // 20% opacity
+  document.getElementById('classIcon').textContent  = c.icon;
+  const lEl = document.getElementById('classLabel');
+  lEl.textContent = c.label;
+  lEl.style.color = c.text;
+  if (conf !== undefined) {
+    document.getElementById('classConf').textContent =
+      conf > 0 ? 'уверенность ' + Math.round(conf * 100) + '%' : '';
+  }
+}
 
 // ── Audio playback (real WAV files) ──────────────────────────────────────────
 let audioEnabled = false;
